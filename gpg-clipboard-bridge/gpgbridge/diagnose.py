@@ -1,13 +1,15 @@
-"""`python -m gpgbridge diagnose`: one-shot report used for setup checks and troubleshooting."""
+"""Health check: `python -m gpgbridge diagnose`, or tray > Health check (opens the report in Notepad)."""
 from __future__ import annotations
 
 import os
 import socket
 import subprocess
+import sys
 from collections import Counter
+from pathlib import Path
 
-from . import gpglog, procdetect, win32
-from .config import load
+from . import __version__, gpglog, procdetect, runtime, win32
+from .config import data_dir, load
 from .diagnosis import is_tracking_stuck
 from .logutil import log_file
 
@@ -32,10 +34,12 @@ def _task_state() -> str:
     return "registered"
 
 
-def main() -> int:
+def report() -> str:
+    lines: list[str] = []
+    p = lines.append
     cfg = load(write_default=False)
-    p = print
-    p("== GPG Clipboard Bridge diagnose ==")
+    p(f"== GPG Clipboard Bridge {__version__} health check ==")
+    p(f"Helper program           : {'installed exe' if runtime.frozen() else 'source checkout'} ({runtime.app_root()})")
     install = r"C:\Program Files\Google\Play Games"
     p(f"Play Games install       : {'found' if os.path.isdir(install) else 'NOT FOUND'} ({install})")
     st = procdetect.scan()
@@ -73,6 +77,39 @@ def main() -> int:
     p(f"Tracking looks stuck     : {stuck}" + ("  -> close the game and relaunch it from Play Games" if stuck else ""))
     p("")
     p(f"Helper Scheduled Task    : {_task_state()}")
+    p(f"Start with Windows       : {_startup_state()}")
     p(f"Helper log               : {log_file()}")
     p(f"Exports folder           : {cfg['exports_dir']}")
+    return "\n".join(lines) + "\n"
+
+
+def _startup_state() -> str:
+    try:
+        from . import installer
+        run = installer.get_run_value()
+        task = installer.task_enabled()
+    except Exception as exc:  # pragma: no cover - diagnostics must never crash
+        return f"unknown ({exc})"
+    parts = (["Scheduled Task"] if task else []) + (["HKCU Run key"] if run else [])
+    return "yes (" + " + ".join(parts) + ")" if parts else "NO (tray > Start with Windows to turn it on)"
+
+
+def open_report() -> Path:
+    """Write the report to a text file and open it (used by the tray and the windowed exe)."""
+    path = data_dir() / "health-check.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        text = report()
+    except Exception as exc:
+        text = f"Health check failed: {exc!r}\n"
+    path.write_text(text, encoding="utf-8")
+    win32.open_path(str(path))
+    return path
+
+
+def main() -> int:
+    if sys.stdout is None:  # windowed exe started without a console
+        open_report()
+        return 0
+    print(report(), end="")
     return 0

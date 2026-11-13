@@ -26,9 +26,9 @@ if ($task) {
     Say "Scheduled Task '$TaskName' was not registered."
 }
 
-# Stop the supervisor and the bridge (python/pythonw running "-m gpgbridge").
-$procs = Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
-    Where-Object { $_.CommandLine -match '-m gpgbridge (supervisor|bridge)' }
+# Stop the supervisor and the bridge (python/pythonw running "-m gpgbridge", or the packaged exe).
+$procs = Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe' OR Name='GPGClipboardBridge.exe'" |
+    Where-Object { $_.Name -eq 'GPGClipboardBridge.exe' -or $_.CommandLine -match '-m gpgbridge (supervisor|bridge)' }
 foreach ($p in $procs) {
     try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; Say "Stopped pid $($p.ProcessId)." } catch { }
 }

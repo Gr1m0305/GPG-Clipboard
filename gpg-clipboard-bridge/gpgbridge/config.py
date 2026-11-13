@@ -16,8 +16,13 @@ def data_dir() -> Path:
     return Path(base) / APP_ID
 
 
-def documents_dir() -> str:
-    """The real Documents folder (follows OneDrive/known-folder redirection)."""
+FOLDERID_DOCUMENTS = "{FDD39AD0-238F-46AF-ADB4-6C85480369C7}"
+FOLDERID_PROGRAMS = "{A77F5D77-2E2B-44C3-A6A2-ABA601054A51}"            # Start menu\Programs (this user)
+FOLDERID_USER_PROGRAM_FILES = "{5CD7AEE2-2219-4A67-B85D-6C9CE15660CB}"  # %LOCALAPPDATA%\Programs
+
+
+def known_folder(folder_id: str) -> str | None:
+    """SHGetKnownFolderPath for the current user (follows OneDrive / folder redirection)."""
     try:
         import ctypes
         import ctypes.wintypes as wt
@@ -27,7 +32,7 @@ def documents_dir() -> str:
             _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
                         ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
 
-        guid = GUID.from_buffer_copy(uuid.UUID("{FDD39AD0-238F-46AF-ADB4-6C85480369C7}").bytes_le)
+        guid = GUID.from_buffer_copy(uuid.UUID(folder_id).bytes_le)
         shell32 = ctypes.WinDLL("shell32")
         ole32 = ctypes.WinDLL("ole32")
         shell32.SHGetKnownFolderPath.argtypes = [ctypes.POINTER(GUID), wt.DWORD, wt.HANDLE,
@@ -37,11 +42,15 @@ def documents_dir() -> str:
         if shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(out)) == 0:
             path = out.value
             ole32.CoTaskMemFree(out)
-            if path:
-                return path
+            return path or None
     except (OSError, AttributeError, ValueError):
         pass
-    return str(Path.home() / "Documents")
+    return None
+
+
+def documents_dir() -> str:
+    """The real Documents folder (follows OneDrive/known-folder redirection)."""
+    return known_folder(FOLDERID_DOCUMENTS) or str(Path.home() / "Documents")
 
 
 DEFAULTS: dict = {
@@ -87,7 +96,8 @@ def load(path: Path | None = None, write_default: bool = True) -> dict:
     elif write_default:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            doc = {"_comment": "Edit and restart the helper (tray > Quit, then run start.ps1 or log off/on)."}
+            doc = {"_comment": "Edit, then restart the helper: tray > Quit, then start it again "
+                                   "(Start menu, start.ps1, or log off and on)."}
             doc.update(DEFAULTS)
             path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
         except OSError:

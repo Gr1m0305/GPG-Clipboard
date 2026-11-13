@@ -1,12 +1,13 @@
 """Supervisor / watchdog with a system-tray icon.
 
-Started at Windows logon by the Scheduled Task (pythonw.exe, no console). Every
+Started at Windows logon (Scheduled Task or HKCU Run key; no console window). Every
 few seconds it checks (psutil) whether Google Play Games is open:
   Play Games opens  -> start the bridge child process
   Play Games closes -> stop the bridge (its clipboard listener is released)
   bridge crashes    -> restart it with back-off
 Handles Play Games being open before the supervisor starts and being opened/closed
-any number of times. Tray: Status, Pause, Open log, Open exports folder, Quit.
+any number of times. Tray: Status, Pause, Open log/exports, Copy last export, Health check,
+Start with Windows, Quit.
 """
 from __future__ import annotations
 
@@ -19,14 +20,14 @@ import threading
 import time
 from pathlib import Path
 
-from . import APP_ID, APP_NAME, __version__, procdetect, win32
+from . import APP_ID, APP_NAME, __version__, procdetect, runtime, win32
 from .config import data_dir, load
 from .logutil import log_file, setup_file_logging
 
 log = logging.getLogger("supervisor")
 bridge_log = logging.getLogger("bridge")
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = runtime.app_root()
 CREATE_NO_WINDOW = 0x08000000
 MUTEX_NAME = "Local\\gpg-clipboard-bridge-supervisor"
 # The Scheduled Task re-launches the supervisor every 5 minutes (crash recovery). Tray > Quit
@@ -80,16 +81,22 @@ STATUS_COLOR = {
 }
 
 
-def make_icon_image(rgb=(128, 128, 128)):
+def make_icon_image(rgb=(128, 128, 128), size: int = 64):
+    """Clipboard icon in the status colour (also rendered at 256 px for the exe's .ico)."""
     from PIL import Image, ImageDraw
 
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    k = size / 64
+
+    def box(*xy):
+        return tuple(round(v * k) for v in xy)
+
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle((10, 8, 54, 60), radius=7, fill=rgb + (255,))
-    d.rounded_rectangle((22, 3, 42, 15), radius=4, fill=(60, 60, 60, 255))
-    d.rectangle((18, 24, 46, 52), fill=(255, 255, 255, 235))
+    d.rounded_rectangle(box(10, 8, 54, 60), radius=round(7 * k), fill=rgb + (255,))
+    d.rounded_rectangle(box(22, 3, 42, 15), radius=round(4 * k), fill=(60, 60, 60, 255))
+    d.rectangle(box(18, 24, 46, 52), fill=(255, 255, 255, 235))
     for y in (30, 37, 44):
-        d.line((22, y, 42, y), fill=rgb + (255,), width=3)
+        d.line(box(22, y, 42, y), fill=rgb + (255,), width=max(1, round(3 * k)))
     return img
 
 
@@ -119,6 +126,7 @@ class Supervisor:
         self.restart_delay = 2.0
         self.next_start_at = 0.0
         self._toast_times: dict[str, float] = {}
+        self.startup_on: bool | None = None  # cached "Start with Windows" state (schtasks is slow)
 
     # -- tray ----------------------------------------------------------------
     def status_line(self) -> str:
@@ -137,7 +145,10 @@ class Supervisor:
             pystray.MenuItem("Open log", lambda _i, _m=None: self._open(log_file())),
             pystray.MenuItem("Open exports folder", lambda _i, _m=None: self._open(Path(self.cfg["exports_dir"]))),
             pystray.MenuItem("Copy last export to clipboard", self._copy_last_export),
+            pystray.MenuItem("Health check", self._health_check),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Start with Windows", self._toggle_startup, checked=lambda _i: bool(self.startup_on)),
+            pystray.MenuItem(f"About {APP_NAME} {__version__}", lambda _i, _m=None: self._open_url()),
             pystray.MenuItem("Quit", self._quit),
         )
 
@@ -170,6 +181,51 @@ class Supervisor:
         log.info("copied %s (%d chars) to the clipboard from the tray", src, len(text))
         self.toast(f"Copied {len(text):,} characters", f"{src.name} is on the clipboard. Paste it in Discord.")
 
+    def _health_check(self, _icon=None, _item=None) -> None:
+        def work():
+            try:
+                from .diagnose import open_report
+                open_report()
+            except Exception:
+                log.exception("health check failed")
+        threading.Thread(target=work, daemon=True, name="health-check").start()
+
+    def _open_url(self) -> None:
+        from .installer import PROJECT_URL
+        try:
+            win32.open_path(PROJECT_URL)
+        except OSError:
+            log.exception("could not open %s", PROJECT_URL)
+
+    def _refresh_startup_state(self) -> None:
+        try:
+            from .installer import startup_enabled
+            self.startup_on = startup_enabled()
+        except Exception:
+            log.exception("could not read the start-with-Windows state")
+        if self.icon:
+            try:
+                self.icon.update_menu()
+            except Exception:
+                pass
+
+    def _toggle_startup(self, _icon=None, _item=None) -> None:
+        want = not self.startup_on
+
+        def work():
+            try:
+                from .installer import set_startup_enabled
+                set_startup_enabled(want)
+            except Exception:
+                log.exception("could not change start with Windows")
+            self._refresh_startup_state()
+            if self.startup_on != want:
+                self.toast("Could not change Start with Windows", "See the log for details.")
+            elif not want:
+                self.toast("Won't start with Windows",
+                           "It keeps running for now. Open it from the Start menu when you need it.")
+        threading.Thread(target=work, daemon=True, name="startup-toggle").start()
+
     def _toggle_pause(self, _icon=None, _item=None) -> None:
         self.paused = not self.paused
         log.info("paused" if self.paused else "resumed")
@@ -181,7 +237,7 @@ class Supervisor:
             self.next_start_at = 0.0
 
     def _quit(self, _icon=None, _item=None) -> None:
-        log.info("quit requested from tray (stays off until next logon or start.ps1)")
+        log.info("quit requested from tray (stays off until next logon, or %s)", runtime.restart_hint())
         try:
             QUIT_MARKER.parent.mkdir(parents=True, exist_ok=True)
             QUIT_MARKER.write_text(str(time.time()), encoding="utf-8")
@@ -228,7 +284,7 @@ class Supervisor:
         with self.child_lock:
             if self.child and self.child.poll() is None:
                 return
-            cmd = [sys.executable, "-m", "gpgbridge", "bridge", "--ipc"]
+            cmd = runtime.self_command("bridge", "--ipc")
             log.info("starting bridge: %s", " ".join(cmd))
             self.child_stopping = False
             self.child = subprocess.Popen(
@@ -352,6 +408,7 @@ class Supervisor:
         def setup(icon):
             icon.visible = True
             threading.Thread(target=self.watch, daemon=True, name="watchdog").start()
+            threading.Thread(target=self._refresh_startup_state, daemon=True, name="startup-state").start()
 
         self.icon.run(setup=setup)
         self.quit_event.set()
@@ -360,18 +417,24 @@ class Supervisor:
         return 0
 
 
-def main(force: bool = False) -> int:
+def main(force: bool = False, interactive: bool = False) -> int:
+    """interactive: started by hand (Start-menu shortcut), so say so if it is already running."""
     setup_file_logging()
     inst = SingleInstance(MUTEX_NAME)
     if inst.already_running:
         log.debug("another supervisor is already running; exiting")
+        if interactive:
+            from .installer import message_box
+            message_box(f"{APP_NAME} is already running.\n\nLook for the clipboard icon in the system tray "
+                        "(click ^ next to the clock if you can't see it).")
         return 0
     if force:
         QUIT_MARKER.unlink(missing_ok=True)
     elif quit_marker_blocks_start():
-        log.info("not starting: you chose Quit earlier in this logon session (run start.ps1 to start again)")
+        log.info("not starting: you chose Quit earlier in this logon session (%s to start again)",
+                 runtime.restart_hint())
         return 0
     cfg = load()
-    log.info("%s %s supervisor starting (pid %s, python %s, project %s)", APP_NAME, __version__, os.getpid(),
-             sys.version.split()[0], PROJECT_ROOT)
+    log.info("%s %s supervisor starting (pid %s, python %s, %s %s)", APP_NAME, __version__, os.getpid(),
+             sys.version.split()[0], "exe" if runtime.frozen() else "project", PROJECT_ROOT)
     return Supervisor(cfg).run()

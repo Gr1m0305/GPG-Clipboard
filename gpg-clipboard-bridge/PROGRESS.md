@@ -9,6 +9,7 @@ Resume notes for a context reset. Update after every part.
 | 3. Supervisor / tray / task / setup | done | part 3 commit |
 | 4. Fallback (file capture / inbox) | done | part 4 commit |
 | 5. README + unit tests | done | part 5 commit |
+| 6. Downloadable installer + GitHub release (follow-up request) | done | "Part 6" commit, tag `v1.0.0` |
 
 Machine used for verification: Windows 10 Home 19045, Google Play Games **Beta 26.10.842.1**
 (`androidboot.kiwi.client_version=26.10.842.1`, product-channel "Beta"), Python 3.14.0.
@@ -287,6 +288,36 @@ Verified: the inbox path in the Part 2 smoke test (72,964-char UTF-8 JSON → cl
   triggers a notification if no Play Games clipboard change arrived within 5 s. Tests: `tests/test_bridge.py`
   (60 tests passing).
 
+## Part 6 — Downloadable installer and GitHub release (done)
+
+Request: a setup process for people who download it, which makes it launch at startup "and whatever else would be
+needed", pushed as a release.
+
+| Piece | What |
+|-------|------|
+| `GPGClipboardBridge.exe` | PyInstaller **one-folder**, windowed build of the same CLI (`supervisor`, `bridge --ipc`, `diagnose`, `uninstall`, `selftest`, `version`). With no arguments (Start-menu shortcut) it starts the tray helper, or says it is already running. One-folder, so the helper and its bridge child don't unpack to %TEMP% on every start. |
+| `GPGClipboardBridge-Setup.exe` | PyInstaller **one-file**, windowed. It carries the program folder as `payload/` and runs `installer.setup_main()`: Yes/No dialog → stop any running copy (packaged or source) → copy to `%LOCALAPPDATA%\Programs\GPG Clipboard Bridge` → start-up registration → Start-menu shortcut → HKCU Apps & features entry → start → summary dialog. `/S` = silent, `--no-start`, `--dir`. |
+| Start-up | Same Scheduled Task as `setup.ps1` (logon + every 5 min, IgnoreNew, no time limit, restart on failure), created from XML with `schtasks /Create /XML`. Falls back to the HKCU Run key (+ a 5-minute task if allowed) where non-admins may not create logon tasks. |
+| Uninstall | Settings → Apps runs `GPGClipboardBridge.exe uninstall`: stop, remove task / Run value / shortcut / Apps entry / logs+config, then a detached `cmd` loop deletes the program folder once the exe has exited. Exports are kept, and a source checkout's venv is left alone. |
+| Tray additions | **Health check** (report in Notepad; the windowed exe has no console), **Start with Windows** toggle (enables/disables the task or Run value), **About**. |
+| Build | `build.ps1`: build venv outside OneDrive with the pinned `requirements-build.txt` (PyInstaller 6.22.3), pytest, generated icon (`make_icon_image(size=256)`) + version resources, app build, `selftest` of the built exe, Setup build, `SHA256SUMS.txt`. |
+| Release | `.github/workflows/release.yml` (repo root, where GitHub requires it): on a `v*` tag, windows-latest + Python 3.14 runs `build.ps1`, then `gh release create` with the Setup exe and checksum, using `RELEASE_NOTES.md`. It fails if the tag doesn't match `__version__`. |
+
+Verified on this PC (Windows 10 19045, not elevated):
+* `schtasks` can create a logon-triggered task for the own account without elevation (probe task, deleted).
+* Silent install: files copied, task points at the installed exe with logon + PT5M triggers, Start-menu shortcut,
+  Apps & features entry (35 MB), and the installed exe running as supervisor + `bridge --ipc`. Its log shows
+  **Connected (Clash of Clans)** through the frozen pipe protocol. `diagnose` from the exe works.
+* Interactive runs, with our own message boxes pressed by a test script: "already running" from the Start menu;
+  uninstall Yes → "was removed" removes the program folder, task, Run value, shortcut, Apps entry and processes,
+  and keeps the exports; a fresh interactive install shows the right text and leaves it running; a reinstall over
+  an existing install; No → exit 1602 with nothing changed.
+* Start with Windows off → task disabled; on → enabled.
+* 68 unit tests pass (10 new in `test_installer.py`).
+
+Not verifiable locally: SmartScreen's prompt on a downloaded copy (the local build has no Mark-of-the-Web), and the
+GitHub Actions run itself (checked after pushing the tag; see below).
+
 ## Open items / how to resume
 
 * Optional re-test after the fix: press Copy in the game once more. Expect one "Copied 9,139 characters" toast
@@ -301,3 +332,11 @@ Decisions taken without asking (per working rules):
 * Runtime data (venv, logs, config.json) goes to `%LOCALAPPDATA%\gpg-clipboard-bridge`, not the OneDrive-synced repo.
 * The bridge never minimizes, moves or sends keys to the game window. The only fix it suggests is the verified
   relaunch, because the minimize/restore experiment left Play Games tracking `MINIMIZED`.
+* Installer: per-user, no admin and no UAC prompt, so anyone can install it. It is PyInstaller-only (no Inno
+  Setup/NSIS), so the whole build and the installer were testable on this PC and in CI with just pip packages.
+* The exe is not code-signed (no certificate available). The README and release notes explain SmartScreen's
+  "More info → Run anyway" and publish a SHA-256.
+* The release is built by GitHub Actions from the tag rather than uploaded from this PC. `gh` isn't installed here,
+  and this way no personal token is needed and the exe is traceable to the tagged source.
+* No LICENSE file was added. Choosing a license is the repository owner's decision.
+* A short root `README.md` was added because GitHub shows the repo root first, and it needs the download link.

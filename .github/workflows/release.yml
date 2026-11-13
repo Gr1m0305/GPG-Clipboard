@@ -1,0 +1,51 @@
+# Builds GPGClipboardBridge-Setup.exe with gpg-clipboard-bridge/build.ps1 and publishes it as a GitHub release.
+# Push a tag to release:   git tag v1.0.0 && git push origin v1.0.0
+# "Run workflow" (manual) only builds and tests; the exe is kept as a run artifact.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: gpg-clipboard-bridge
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Check the tag matches the version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          $v = python -c "import gpgbridge; print(gpgbridge.__version__)"
+          if ("v$v" -ne $env:GITHUB_REF_NAME) { throw "Tag $env:GITHUB_REF_NAME does not match gpgbridge.__version__ $v" }
+
+      - name: Test and build
+        run: ./build.ps1 -Python (Get-Command python).Source
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME dist/GPGClipboardBridge-Setup.exe dist/SHA256SUMS.txt `
+            --title "GPG Clipboard Bridge $env:GITHUB_REF_NAME" --notes-file RELEASE_NOTES.md --latest
+
+      - name: Keep the build (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPGClipboardBridge-Setup
+          path: gpg-clipboard-bridge/dist/

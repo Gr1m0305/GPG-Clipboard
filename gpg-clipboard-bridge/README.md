@@ -7,6 +7,9 @@ saves every export as `export.json`, ready to attach to your bot's `/import`.
 It starts by itself at Windows logon, sits in the system tray using almost no CPU, and switches on whenever
 Google Play Games is open. You never launch it by hand.
 
+**Download:** [GPGClipboardBridge-Setup.exe](https://github.com/Gr1m0305/GPG-Clipboard/releases/latest/download/GPGClipboardBridge-Setup.exe)
+(latest release, Windows 10/11, nothing else to install). See [Install](#install).
+
 ## How it works (and why it is built this way)
 
 Investigated on this PC with Play Games Beta 26.10.842.1 (details in [PROGRESS.md](PROGRESS.md)):
@@ -32,11 +35,33 @@ So the helper:
 It never touches the game or the Play Games process. No injection, no memory reading, no input automation, no
 modified files, nothing sent over the network.
 
-## Install (fresh Windows PC)
+## Install
 
-Requirements: Windows 10/11, Google Play Games for PC, **Python 3.10 or newer**
-([python.org](https://www.python.org/downloads/windows/), tick *Add python.exe to PATH*, or
-`winget install -e --id Python.Python.3.12`).
+### Download the installer (recommended)
+
+Requirements: Windows 10 or 11 and Google Play Games for PC. Python is **not** needed.
+
+1. Download **GPGClipboardBridge-Setup.exe** from the
+   [latest release](https://github.com/Gr1m0305/GPG-Clipboard/releases/latest).
+2. Double-click it. The exe is not code-signed, so Windows may show **"Windows protected your PC"**: click
+   **More info → Run anyway**. (Your browser may also ask whether to keep the download: choose **Keep**.)
+3. Click **Yes** to install. It installs for your Windows account only, with **no admin rights**, and:
+   * copies the program to `%LOCALAPPDATA%\Programs\GPG Clipboard Bridge`
+   * makes it **start automatically every time you sign in** (Scheduled Task *GPG Clipboard Bridge*, at logon
+     and re-checked every 5 minutes; on PCs where that is not allowed, an entry in your Startup apps instead)
+   * adds **GPG Clipboard Bridge** to the Start menu, and an entry in **Settings → Apps** for uninstalling
+   * starts it right away
+4. A clipboard icon appears in the system tray. It may be hidden under the **^** arrow next to the clock;
+   drag it onto the taskbar to keep it visible.
+
+That's it. To update, download the new Setup and run it: it replaces the old version and keeps your settings.
+
+Silent install (for scripts): `GPGClipboardBridge-Setup.exe /S` (add `--no-start` to install without starting).
+
+### Install from source (developers)
+
+Requirements: **Python 3.10 or newer** ([python.org](https://www.python.org/downloads/windows/), tick *Add
+python.exe to PATH*, or `winget install -e --id Python.Python.3.12`).
 
 1. Put the `gpg-clipboard-bridge` folder somewhere permanent. If it is inside OneDrive, right-click it →
    **Always keep on this device**.
@@ -47,16 +72,16 @@ Requirements: Windows 10/11, Google Play Games for PC, **Python 3.10 or newer**
    ```
 
    This creates a private Python environment in `%LOCALAPPDATA%\gpg-clipboard-bridge\venv`, installs psutil,
-   pystray and Pillow, registers the Scheduled Task **GPG Clipboard Bridge** (at logon, your user, hidden, no
-   console), and starts it. No admin rights are normally needed; if Windows insists, it asks once.
-3. A clipboard icon appears in the system tray (it may be under the **^** overflow arrow; drag it out to keep it
-   visible).
+   pystray and Pillow, registers the same Scheduled Task **GPG Clipboard Bridge** (at logon, your user, hidden,
+   no console), and starts it. No admin rights are normally needed; if Windows insists, it asks once.
+
+Use one or the other. Both register the same task, so whichever you installed last is the one that starts.
 
 ### One-time Play Games / ADB settings
 
 **None.** Clipboard sharing is built into Play Games and enabled by default. There is no ADB or developer
 setting to switch on in the consumer client. ADB only exists in Google's separate *Developer Emulator*, which
-is not needed. `setup.ps1` deliberately downloads no ADB and installs no APK.
+is not needed. Neither installer downloads ADB or installs an APK.
 
 ## Test it
 
@@ -68,8 +93,8 @@ is not needed. `setup.ps1` deliberately downloads no ADB and installs no APK.
    `Documents\GPG Clipboard Exports\export.json`.
 5. Optional: copy text in Notepad and paste it into a text box in the game (Windows → Android, built into Play Games).
 
-If step 3 says **"Play Games blocked the copy"**, see Troubleshooting. Run `.\diagnose.ps1` at any time for a
-health report.
+If step 3 says **"Play Games blocked the copy"**, see Troubleshooting. Tray icon → **Health check** gives a
+report at any time (from a source install, `.\diagnose.ps1` does the same in the console).
 
 ### Getting it into Discord
 
@@ -87,7 +112,10 @@ health report.
 | Open log | `%LOCALAPPDATA%\gpg-clipboard-bridge\logs\gpg-clipboard-bridge.log` (rotating, 5 × 1 MB) |
 | Open exports folder | `Documents\GPG Clipboard Exports` |
 | Copy last export to clipboard | Puts `export.json` back on the clipboard |
-| Quit | Stops the helper until your next logon (or run `.\start.ps1`) |
+| Health check | Opens a report in Notepad: Play Games state, clipboard-sharing counters, whether it is stuck, start-up registration |
+| Start with Windows | On by default. Untick it to stop the helper from starting at logon (it keeps running until you quit) |
+| About | Opens the project page |
+| Quit | Stops the helper until your next logon. To start it again sooner: Start menu → **GPG Clipboard Bridge** (source install: `.\start.ps1`) |
 
 <!-- FALLBACK-START -->
 ## Fallback: export.json and the inbox folder
@@ -137,8 +165,10 @@ reliably, so screenshots are not used.
 |---------|-------|-----|
 | Notification **"Play Games blocked the copy"**, or the tray says *clipboard sharing looks stuck* (orange icon) | Play Games lost track of the game window after a display change and drops Android → Windows copies | **Close the game window** so the game exits and **launch it again from Play Games**, then press Copy again. If that doesn't help, quit Play Games completely (tray icon → Quit) and reopen it. Avoid moving the game between monitors before copying. |
 | "Play Games blocked the copy", advice says *keep the game window focused* | Another window was in front when the copy arrived | Click into the game, then press Copy. |
-| No notification at all after pressing Copy | Helper not running, or Play Games never received the copy | Check the tray icon. If it's missing, run `.\start.ps1`. Run `.\diagnose.ps1`: if `a2w_received` did not go up, Play Games did not get the copy from the game (try again, or update Play Games). |
-| Tray icon missing after logon | Task disabled, Python moved, or you chose Quit earlier | `.\start.ps1`. Check Task Scheduler → *GPG Clipboard Bridge* → Last Run Result. Re-run `setup.ps1` if you moved the folder or reinstalled Python. |
+| No notification at all after pressing Copy | Helper not running, or Play Games never received the copy | Check the tray icon. If it's missing, open **GPG Clipboard Bridge** from the Start menu. Tray → **Health check**: if `a2w_received` did not go up, Play Games did not get the copy from the game (try again, or update Play Games). |
+| Tray icon missing after logon | Start with Windows switched off, you chose Quit earlier, or (source install) Python moved | Open **GPG Clipboard Bridge** from the Start menu, then tray → make sure **Start with Windows** is ticked. Source install: `.\start.ps1`, and re-run `setup.ps1` if you moved the folder or reinstalled Python. |
+| "Windows protected your PC" when running Setup | The exe is not code-signed, so SmartScreen does not know it yet | **More info → Run anyway**. Compare the file's SHA-256 with `SHA256SUMS.txt` on the release page if you want to check it is the original. |
+| Antivirus quarantines the exe | Some scanners flag unsigned PyInstaller-built programs | Restore it / add an exception, or install from source instead. |
 | Pasted export is cut off in Discord | Discord's length limit, not the helper (the clipboard holds everything, check in Notepad) | Attach `export.json` instead. |
 | `setup.ps1` says Python not found | Python missing, or only the Microsoft Store alias exists | Install Python from python.org with *Add to PATH*, or pass `-Python C:\path\to\python.exe`. |
 | "running scripts is disabled on this system" | PowerShell execution policy | Use `powershell -ExecutionPolicy Bypass -File .\setup.ps1`. |
@@ -150,6 +180,12 @@ The log (tray → **Open log**) records every drop with a diagnosis line such as
 
 ## Uninstall
 
+**Installed with Setup:** Settings → Apps → **GPG Clipboard Bridge** → Uninstall. This stops the helper and
+removes the program, the start-up task, the Start-menu shortcut, logs and settings. Your exports in
+`Documents\GPG Clipboard Exports` are never deleted.
+
+**Source install:**
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
 ```
@@ -159,8 +195,8 @@ This removes the Scheduled Task and stops the helper. Add `-RemoveData` to also 
 
 ## Configuration
 
-`%LOCALAPPDATA%\gpg-clipboard-bridge\config.json` is created on first run. Tray → Quit, then `.\start.ps1`, to
-apply changes.
+`%LOCALAPPDATA%\gpg-clipboard-bridge\config.json` is created on first run. To apply changes, tray → Quit, then
+start it again from the Start menu (source install: `.\start.ps1`).
 
 | Key | Default | Meaning |
 |-----|---------|---------|
@@ -177,9 +213,14 @@ apply changes.
 
 ```
 gpg-clipboard-bridge/
-  setup.ps1  uninstall.ps1  start.ps1  diagnose.ps1
+  setup.ps1  uninstall.ps1  start.ps1  diagnose.ps1   source install
+  build.ps1         builds dist\GPGClipboardBridge-Setup.exe (PyInstaller)
+  packaging/        exe entry points + icon/version-resource generator
+  RELEASE_NOTES.md  text of the GitHub release
   gpgbridge/
-    supervisor.py   tray + watchdog (Scheduled Task entry point)
+    installer.py    Setup / uninstall: program folder, start-up task, shortcut, Apps entry
+    runtime.py      source checkout vs packaged exe
+    supervisor.py   tray + watchdog (what starts at logon)
     bridge.py       clipboard bridge child process
     winclip.py      Windows clipboard read/write + change listener (ctypes)
     gpglog.py       Play Games Service.log follower/parser
@@ -205,3 +246,26 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -Dev
 
 Real-clipboard tests are opt-in (they restore your clipboard afterwards): set `GPGBRIDGE_CLIPBOARD_TESTS=1`.
 Run the bridge in a console with `python -m gpgbridge bridge` to watch events live (stop the tray app first).
+
+### Building the installer and releasing
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
+```
+
+This makes a build venv in `%LOCALAPPDATA%\gpg-clipboard-bridge\build` with the pinned versions in
+`requirements-build.txt`, runs the tests, builds `GPGClipboardBridge.exe` (one folder, no console) and checks
+that it starts (`selftest`), then packs it into the single-file `dist\GPGClipboardBridge-Setup.exe` and writes
+`dist\SHA256SUMS.txt`.
+
+To publish a release, bump `__version__` in `gpgbridge/__init__.py`, update `RELEASE_NOTES.md`, commit, then
+push a matching tag. GitHub Actions (`.github/workflows/release.yml` in the repository root) runs the same
+`build.ps1` on a clean Windows machine and attaches the Setup exe and checksum to the release:
+
+```powershell
+git tag v1.0.0
+```
+
+```powershell
+git push origin main v1.0.0
+```
