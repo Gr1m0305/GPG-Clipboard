@@ -10,7 +10,8 @@ from . import __version__
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="gpgbridge", description="Google Play Games (PC) -> Windows clipboard helper")
     sub = ap.add_subparsers(dest="cmd")
-    sub.add_parser("supervisor", help="tray app + watchdog (what the Scheduled Task runs)")
+    s = sub.add_parser("supervisor", help="tray app + watchdog (what the Scheduled Task runs)")
+    s.add_argument("--force", action="store_true", help="start even if Quit was chosen earlier this session")
     b = sub.add_parser("bridge", help="run the clipboard bridge (console mode for debugging)")
     b.add_argument("--ipc", action="store_true", help="JSON events on stdout (used by the supervisor)")
     sub.add_parser("diagnose", help="print a report of Play Games / clipboard-sharing state")
@@ -19,7 +20,7 @@ def main(argv=None) -> int:
 
     if args.cmd == "supervisor":
         from .supervisor import main as run
-        return run()
+        return run(force=args.force)
     if args.cmd == "bridge":
         from .bridge import main as run
         return run(ipc=args.ipc)

@@ -6,7 +6,7 @@ Resume notes for a context reset. Update after every part.
 |------|--------|--------|
 | 1. Feasibility research | done | part 1 commit |
 | 2. Bridge | done | part 2 commit |
-| 3. Supervisor / tray / task / setup | pending | |
+| 3. Supervisor / tray / task / setup | done | part 3 commit |
 | 4. Fallback (file capture / inbox) | pending | |
 | 5. README + unit tests | pending | |
 
@@ -205,6 +205,33 @@ Verified (2026-11-13, live Play Games):
   it to Android; `stop` released the listener and exited 0.
 * **Not yet verified:** a real in-game Copy reaching Windows. Needs Play Games' tracking to be healthy, which
   needs a game relaunch, and a human pressing Copy in the game.
+
+---
+
+## Part 3 — Supervisor, tray, Scheduled Task (done)
+
+* `gpgbridge/supervisor.py`: pystray tray icon (colour = status), menu: Status line, Pause, Open log,
+  Open exports folder, Quit. Toasts use `Icon.notify` (Windows balloon/toast) and are rate-limited.
+* Watchdog: `procdetect.scan()` every 2.5 s (≈ a few ms of CPU). Play Games open → start the bridge child
+  (`pythonw -m gpgbridge bridge --ipc`, CREATE_NO_WINDOW). Closed → `stop` on stdin (kill after 5 s). The bridge
+  exiting unexpectedly → restart with back-off 2→60 s.
+* Single instance: named mutex `Local\gpg-clipboard-bridge-supervisor`.
+* Scheduled Task **"GPG Clipboard Bridge"**: AtLogOn (current user) + a time trigger repeating every 5 min with
+  no end date, MultipleInstances=IgnoreNew, no time limit, RestartCount 999. The repeat trigger is the crash
+  safety net, because Task Scheduler's restart-on-failure does not fire for a non-zero exit code.
+  Tray **Quit** writes `quit.marker` so the repeat trigger does not bring it back until the next logon
+  (`start.ps1` clears it).
+* Scripts: `setup.ps1` (find Python ≥3.10, venv in `%LOCALAPPDATA%\gpg-clipboard-bridge\venv`, pip install,
+  register task, falls back to an elevated re-launch only if registration is denied, start), `uninstall.ps1`
+  (`-RemoveData`, `-KeepTask`), `start.ps1`, `diagnose.ps1`.
+* Logging: `%LOCALAPPDATA%\gpg-clipboard-bridge\logs\gpg-clipboard-bridge.log`, rotating 1 MB × 5. Bridge log
+  records reach it through the supervisor (one file, no two-process rotation clash).
+
+Verified (2026-11-13): `setup.ps1 -Dev` ran clean on this PC **without elevation**. Task registered
+(LogonTrigger for DESKTOP\user; TimeTrigger PT5M, duration indefinite). Started: the supervisor found Play Games
+already open → bridge started → status "Connected (Clash of Clans)" within 1 s. Note: venv `pythonw.exe` is
+a launcher, so each process appears twice (launcher + real interpreter). `uninstall.ps1 -KeepTask` stopped
+everything (0 processes left).
 
 Decisions taken without asking (per working rules):
 * Config override for tests: env `GPGBRIDGE_CONFIG=<path to config.json>`.
