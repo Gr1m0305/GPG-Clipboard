@@ -4,6 +4,91 @@ Gets text you copy inside **Google Play Games for PC** (for example Clash of Cla
 Data Export → **Copy to clipboard**) onto the **Windows** clipboard, so you can paste it into Discord. It also
 saves every export as `export.json`, ready to attach to your bot's `/import`.
 
+It starts by itself at Windows logon, sits in the system tray using almost no CPU, and switches on whenever
+Google Play Games is open. You never launch it by hand.
+
+## How it works (and why it is built this way)
+
+Investigated on this PC with Play Games Beta 26.10.842.1 (details in [PROGRESS.md](PROGRESS.md)):
+
+* **Play Games already has two-way clipboard sharing, and it is on by default.** Windows → Android always works.
+  Android → Windows works too, but Play Games only accepts it while it thinks the game window is in front.
+* After a **display change** (moving the game to another monitor, a monitor waking or reconnecting, or a
+  resolution change), Play Games can start tracking a hidden off-screen window instead of the game. From then on
+  it silently drops every in-game copy ("Emulator window is not foreground"). That is why "Copy to clipboard"
+  seemed to do nothing.
+* ADB is switched off in the consumer client and you can't install your own APK, so a third-party Android-side
+  bridge is impossible without bypassing Google's protections. This tool does not bypass anything.
+
+So the helper:
+
+1. **Watches the Windows clipboard.** When Play Games writes text from the game, you get a notification
+   "Copied 41,203 characters from Play Games", and the text is saved as `export.json` / `latest.txt`.
+2. **Reads Play Games' log (read-only).** When Play Games drops a copy, you get "Play Games blocked the copy"
+   with the exact fix. When it spots the stuck state early, the tray icon turns orange and warns you before you
+   press Copy.
+3. **Provides a file fallback:** `export.json`, an inbox folder, and "Copy last export to clipboard".
+
+It never touches the game or the Play Games process. No injection, no memory reading, no input automation, no
+modified files, nothing sent over the network.
+
+## Install (fresh Windows PC)
+
+Requirements: Windows 10/11, Google Play Games for PC, **Python 3.10 or newer**
+([python.org](https://www.python.org/downloads/windows/), tick *Add python.exe to PATH*, or
+`winget install -e --id Python.Python.3.12`).
+
+1. Put the `gpg-clipboard-bridge` folder somewhere permanent. If it is inside OneDrive, right-click it →
+   **Always keep on this device**.
+2. Open PowerShell in that folder and run:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
+   ```
+
+   This creates a private Python environment in `%LOCALAPPDATA%\gpg-clipboard-bridge\venv`, installs psutil,
+   pystray and Pillow, registers the Scheduled Task **GPG Clipboard Bridge** (at logon, your user, hidden, no
+   console), and starts it. No admin rights are normally needed; if Windows insists, it asks once.
+3. A clipboard icon appears in the system tray (it may be under the **^** overflow arrow; drag it out to keep it
+   visible).
+
+### One-time Play Games / ADB settings
+
+**None.** Clipboard sharing is built into Play Games and enabled by default. There is no ADB or developer
+setting to switch on in the consumer client. ADB only exists in Google's separate *Developer Emulator*, which
+is not needed. `setup.ps1` deliberately downloads no ADB and installs no APK.
+
+## Test it
+
+1. Open Google Play Games and start Clash of Clans. The tray tooltip changes to **Connected (Clash of Clans)**
+   (green icon).
+2. In the game: **Settings → More Settings → Data Export → Copy to clipboard**.
+3. A notification appears: **"Copied N characters from Play Games"**.
+4. Open Notepad and press **Ctrl+V**. The whole export is there. It is also saved in
+   `Documents\GPG Clipboard Exports\export.json`.
+5. Optional: copy text in Notepad and paste it into a text box in the game (Windows → Android, built into Play Games).
+
+If step 3 says **"Play Games blocked the copy"**, see Troubleshooting. Run `.\diagnose.ps1` at any time for a
+health report.
+
+### Getting it into Discord
+
+* Short text: paste it.
+* A full village export is usually longer than Discord allows in a message or slash-command text option
+  (slash-command text options max out at 6,000 characters). Attach
+  `Documents\GPG Clipboard Exports\export.json` as a file to `/import` instead. It is always the newest export.
+
+## Tray menu
+
+| Item | Does |
+|------|------|
+| Status | Waiting for Play Games / waiting for the game / **Connected** / Connected, but clipboard sharing looks stuck / Paused |
+| Pause | Stops the bridge until you un-pause (Play Games' own sharing keeps working, you just get no notifications or saved files) |
+| Open log | `%LOCALAPPDATA%\gpg-clipboard-bridge\logs\gpg-clipboard-bridge.log` (rotating, 5 × 1 MB) |
+| Open exports folder | `Documents\GPG Clipboard Exports` |
+| Copy last export to clipboard | Puts `export.json` back on the clipboard |
+| Quit | Stops the helper until your next logon (or run `.\start.ps1`) |
+
 <!-- FALLBACK-START -->
 ## Fallback: export.json and the inbox folder
 
@@ -45,3 +130,78 @@ Files already in the inbox when the helper starts are not re-imported. Change or
 *Why not screenshots?* An export is tens of thousands of characters of JSON. A screenshot cannot hold it
 reliably, so screenshots are not used.
 <!-- FALLBACK-END -->
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Notification **"Play Games blocked the copy"**, or the tray says *clipboard sharing looks stuck* (orange icon) | Play Games lost track of the game window after a display change and drops Android → Windows copies | **Close the game window** so the game exits and **launch it again from Play Games**, then press Copy again. If that doesn't help, quit Play Games completely (tray icon → Quit) and reopen it. Avoid moving the game between monitors before copying. |
+| "Play Games blocked the copy", advice says *keep the game window focused* | Another window was in front when the copy arrived | Click into the game, then press Copy. |
+| No notification at all after pressing Copy | Helper not running, or Play Games never received the copy | Check the tray icon. If it's missing, run `.\start.ps1`. Run `.\diagnose.ps1`: if `a2w_received` did not go up, Play Games did not get the copy from the game (try again, or update Play Games). |
+| Tray icon missing after logon | Task disabled, Python moved, or you chose Quit earlier | `.\start.ps1`. Check Task Scheduler → *GPG Clipboard Bridge* → Last Run Result. Re-run `setup.ps1` if you moved the folder or reinstalled Python. |
+| Pasted export is cut off in Discord | Discord's length limit, not the helper (the clipboard holds everything, check in Notepad) | Attach `export.json` instead. |
+| `setup.ps1` says Python not found | Python missing, or only the Microsoft Store alias exists | Install Python from python.org with *Add to PATH*, or pass `-Python C:\path\to\python.exe`. |
+| "running scripts is disabled on this system" | PowerShell execution policy | Use `powershell -ExecutionPolicy Bypass -File .\setup.ps1`. |
+| Inbox file not picked up | Wrong folder or extension, or the file was already there at start-up | Use `Documents\GPG Clipboard Exports\inbox`, `.json` or `.txt`. Re-save the file to import it again. |
+| Helper fails at logon from a OneDrive folder | Files On-Demand removed the local copy | Right-click the folder → *Always keep on this device*. |
+
+The log (tray → **Open log**) records every drop with a diagnosis line such as
+`Play Games DROPPED an in-game copy ... cause=tracked_window_mismatch, foreground_hwnd=…, tracked_window=…`.
+
+## Uninstall
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
+```
+
+This removes the Scheduled Task and stops the helper. Add `-RemoveData` to also delete
+`%LOCALAPPDATA%\gpg-clipboard-bridge` (venv, logs, config). Your exports are never deleted.
+
+## Configuration
+
+`%LOCALAPPDATA%\gpg-clipboard-bridge\config.json` is created on first run. Tray → Quit, then `.\start.ps1`, to
+apply changes.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `toasts` | `true` | Windows notifications |
+| `process_poll_seconds` | `2.5` | How often the supervisor checks for Play Games |
+| `two_way` | `false` | Also notify when Windows text is synced to Android (Play Games always does that sync itself; this only adds notifications) |
+| `save_exports` | `true` | Write `latest.txt` / `export.json` / history |
+| `exports_dir` | `{documents}\GPG Clipboard Exports` | Export folder (`{documents}` = your real Documents folder) |
+| `history_keep` | `20` | Number of exports kept in `history\` |
+| `inbox_enabled`, `inbox_dirs`, `inbox_extensions`, `inbox_load_to_clipboard` | on, `{exports_dir}\inbox`, `.json`/`.txt`, `true` | Inbox fallback |
+| `repeat_window_seconds` | `10` | Repeated Copy presses within this window produce one notification |
+
+## Files
+
+```
+gpg-clipboard-bridge/
+  setup.ps1  uninstall.ps1  start.ps1  diagnose.ps1
+  gpgbridge/
+    supervisor.py   tray + watchdog (Scheduled Task entry point)
+    bridge.py       clipboard bridge child process
+    winclip.py      Windows clipboard read/write + change listener (ctypes)
+    gpglog.py       Play Games Service.log follower/parser
+    tracker.py      change detection + anti-loop
+    procdetect.py   Play Games / emulator process detection
+    diagnosis.py    why a copy was dropped
+    exports.py      export.json / history / inbox
+    win32.py        window helpers
+    diagnose.py     health report
+  tests/            unit tests (pytest)
+  PROGRESS.md       investigation notes and decisions
+```
+
+## Development
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -Dev
+```
+
+```powershell
+& "$env:LOCALAPPDATA\gpg-clipboard-bridge\venv\Scripts\python.exe" -m pytest
+```
+
+Real-clipboard tests are opt-in (they restore your clipboard afterwards): set `GPGBRIDGE_CLIPBOARD_TESTS=1`.
+Run the bridge in a console with `python -m gpgbridge bridge` to watch events live (stop the tray app first).

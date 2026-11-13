@@ -185,6 +185,7 @@ class LogTailer:
         self._ino: int | None = None
         self._offset = 0
         self._buf = b""
+        self._was_missing = False
 
     def _stat(self):
         try:
@@ -215,10 +216,12 @@ class LogTailer:
     def poll(self) -> list[str]:
         st = self._stat()
         if st is None:
+            self._was_missing = True
             return []
         if self._ino is None:
             self._ino = st.st_ino
-            self._offset = st.st_size if self.start_at_end else 0
+            # a file that appeared while we were watching is new content, read it all
+            self._offset = st.st_size if (self.start_at_end and not self._was_missing) else 0
         elif st.st_ino != self._ino or st.st_size < self._offset:
             # rotated or truncated: the new file is read from the beginning
             self._ino, self._offset, self._buf = st.st_ino, 0, b""

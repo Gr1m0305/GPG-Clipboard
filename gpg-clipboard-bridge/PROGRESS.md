@@ -8,7 +8,7 @@ Resume notes for a context reset. Update after every part.
 | 2. Bridge | done | part 2 commit |
 | 3. Supervisor / tray / task / setup | done | part 3 commit |
 | 4. Fallback (file capture / inbox) | done | part 4 commit |
-| 5. README + unit tests | pending | |
+| 5. README + unit tests | done | part 5 commit |
 
 Machine used for verification: Windows 10 Home 19045, Google Play Games **Beta 26.10.842.1**
 (`androidboot.kiwi.client_version=26.10.842.1`, product-channel "Beta"), Python 3.14.0.
@@ -251,6 +251,30 @@ while Play Games is open):
 * README section: "Fallback: export.json and the inbox folder".
 
 Verified: the inbox path in the Part 2 smoke test (72,964-char UTF-8 JSON → clipboard + export.json identical).
+
+---
+
+## Part 5 — Docs and tests (done)
+
+* README.md: how it works, fresh-PC install, one-time settings (none), test steps, Discord note (slash-command
+  text options max out at 6,000 chars, so attach export.json), tray menu, fallback, troubleshooting table,
+  uninstall, config keys, development.
+* Tests (`pytest`, 55 passing on 2026-11-13):
+  `test_tracker.py` (origin + change detection + anti-loop), `test_procdetect.py` (verified process and window
+  layout, open/close cycles), `test_gpglog.py` (real log formats, rotation, late file, prime),
+  `test_diagnosis.py` (the recorded 16:38 failure state), `test_exports.py`, `test_supervisor.py` (watchdog:
+  already open, repeated open/close, crash back-off, pause), `test_winclip_integration.py` (opt-in real clipboard:
+  150k+ char Unicode round trip, listener owner attribution).
+* Tailer change found while testing: a log file that appears while the bridge is watching is now read from the start.
+
+## Open items / how to resume
+
+* **Still to verify with a real in-game copy:** after relaunching the game (so Play Games tracks the game
+  window), press Copy in the game, then expect the toast and `export.json`. If it is dropped again, the log line
+  `Play Games DROPPED an in-game copy ... diagnosis=` shows the foreground window vs the tracked window. That
+  confirms or refutes the "last WindowState" inference in Part 1.
+* If Google fixes the tracking bug in a later Play Games version, nothing needs to change. The blocked/stuck
+  paths simply stop firing.
 
 Decisions taken without asking (per working rules):
 * Config override for tests: env `GPGBRIDGE_CONFIG=<path to config.json>`.
