@@ -7,7 +7,7 @@ Resume notes for a context reset. Update after every part.
 | 1. Feasibility research | done | part 1 commit |
 | 2. Bridge | done | part 2 commit |
 | 3. Supervisor / tray / task / setup | done | part 3 commit |
-| 4. Fallback (file capture / inbox) | pending | |
+| 4. Fallback (file capture / inbox) | done | part 4 commit |
 | 5. README + unit tests | pending | |
 
 Machine used for verification: Windows 10 Home 19045, Google Play Games **Beta 26.10.842.1**
@@ -232,6 +232,25 @@ Verified (2026-11-13): `setup.ps1 -Dev` ran clean on this PC **without elevation
 already open → bridge started → status "Connected (Clash of Clans)" within 1 s. Note: venv `pythonw.exe` is
 a launcher, so each process appears twice (launcher + real interpreter). `uninstall.ps1 -KeepTask` stopped
 everything (0 processes left).
+
+---
+
+## Part 4 — Fallback (done)
+
+A live bridge *is* possible (Play Games' native sharing), but it breaks whenever Play Games loses track of the
+window. So the fallback runs all the time, alongside the live path, inside the bridge (started by the supervisor
+while Play Games is open):
+* Every in-game copy is saved: `latest.txt`, plus `export.json` and `history\` when the text is JSON.
+* `InboxWatcher` polls `<exports>\inbox` every 1 s. A new or changed `.json`/`.txt` file whose size has been
+  stable for 1 s is decoded (UTF-8 / UTF-8-BOM / UTF-16 BOM; cp1252 last resort), put on the clipboard (marked as
+  a self-write for anti-loop) and saved as `export.json`. Files already there at start-up are skipped.
+* Tray **Copy last export to clipboard** re-copies `export.json` (or `latest.txt`).
+* There is no Android-side file source (no shared folder, ADB or file transfer on consumer Play Games). The
+  README explains the phone → inbox route. Screenshots are not used because they can't hold tens of thousands
+  of characters of JSON.
+* README section: "Fallback: export.json and the inbox folder".
+
+Verified: the inbox path in the Part 2 smoke test (72,964-char UTF-8 JSON → clipboard + export.json identical).
 
 Decisions taken without asking (per working rules):
 * Config override for tests: env `GPGBRIDGE_CONFIG=<path to config.json>`.

@@ -136,6 +136,7 @@ class Supervisor:
             pystray.MenuItem("Pause", self._toggle_pause, checked=lambda _i: self.paused),
             pystray.MenuItem("Open log", lambda _i, _m=None: self._open(log_file())),
             pystray.MenuItem("Open exports folder", lambda _i, _m=None: self._open(Path(self.cfg["exports_dir"]))),
+            pystray.MenuItem("Copy last export to clipboard", self._copy_last_export),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self._quit),
         )
@@ -147,6 +148,27 @@ class Supervisor:
             win32.open_path(str(path))
         except OSError:
             log.exception("could not open %s", path)
+
+    def _copy_last_export(self, _icon=None, _item=None) -> None:
+        """Fallback: put the newest saved export back on the clipboard (e.g. after copying something else)."""
+        from .exports import read_text_file
+        from .winclip import write_text
+
+        folder = Path(self.cfg["exports_dir"])
+        src = next((p for p in (folder / "export.json", folder / "latest.txt") if p.exists()), None)
+        if src is None:
+            self.toast("No export saved yet", f"Nothing in {folder}. Copy the export in the game first, "
+                       "or drop a file into the inbox folder.")
+            return
+        try:
+            text = read_text_file(src)
+            write_text(text)
+        except Exception:
+            log.exception("could not copy %s to the clipboard", src)
+            self.toast("Could not copy the export", "See the log for details.")
+            return
+        log.info("copied %s (%d chars) to the clipboard from the tray", src, len(text))
+        self.toast(f"Copied {len(text):,} characters", f"{src.name} is on the clipboard. Paste it in Discord.")
 
     def _toggle_pause(self, _icon=None, _item=None) -> None:
         self.paused = not self.paused
