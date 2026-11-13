@@ -5,7 +5,7 @@ Resume notes for a context reset. Update after every part.
 | Part | Status | Commit |
 |------|--------|--------|
 | 1. Feasibility research | done | part 1 commit |
-| 2. Bridge | pending | |
+| 2. Bridge | done | part 2 commit |
 | 3. Supervisor / tray / task / setup | pending | |
 | 4. Fallback (file capture / inbox) | pending | |
 | 5. README + unit tests | pending | |
@@ -170,7 +170,46 @@ Log files: `%LOCALAPPDATA%\Google\Play Games\Logs\Service.log` (rotated to `Serv
 3. **Not possible on consumer Play Games:** ADB polling and a companion APK (listener, accessibility service or
    share target). These would only work on the Developer Emulator. Not built, see above.
 
+---
+
+## Part 2 — Bridge (done)
+
+Package `gpgbridge/` (Python 3.10+, deps: psutil, pystray, Pillow; clipboard and Win32 via ctypes, no pywin32):
+
+| Module | Role |
+|--------|------|
+| `win32.py` | window enumeration, foreground window, process image path, `is_game_window()` |
+| `winclip.py` | CF_UNICODETEXT read/write (GlobalSize-based, no truncation) and `ClipboardListener` (message-only window + `AddClipboardFormatListener`, captures owner PID per change) |
+| `procdetect.py` | `classify()` (pure) + `scan()` (psutil) → client/emulator running |
+| `gpglog.py` | `ServiceLogParser` (clipboard events, WindowState, display change) + `LogTailer` (FILE_SHARE_DELETE, rotation-safe, `prime()` restores current state) |
+| `tracker.py` | `classify_origin()` + `ClipboardTracker` anti-loop: ignores self-writes, Windows→Android→Windows echoes, and repeated Copy presses within 10 s |
+| `diagnosis.py` | `diagnose_block()` (why a copy was dropped + fix), `is_tracking_stuck()` |
+| `exports.py` | `ExportStore` (latest.txt / export.json / history, atomic UTF-8 writes) + `InboxWatcher` |
+| `bridge.py` | ties it together; `--ipc` = JSON events on stdout, `stop` on stdin |
+| `diagnose.py` | `python -m gpgbridge diagnose` report |
+
+Behaviour:
+* Origin of a clipboard change = owner process. Play Games' `Service.exe` or crosvm → in-game copy. Our own PID → self.
+  No owner → wait 1.5 s for `Updating Windows clipboard.` in Service.log.
+* "Reconnect": the bridge re-scans processes every 2 s and follows Service.log across rotation and late creation,
+  so starting the emulator after the helper just works.
+* Two-way: Windows → Android is done natively by Play Games. `"two_way": true` in config.json only adds
+  "Sent N characters to Play Games" notifications.
+
+Verified (2026-11-13, live Play Games):
+* `diagnose` output: sharing enabled, 34 Windows→Android syncs, 13 Android→Windows received / 13 blocked
+  (`not_foreground`), ADB ports closed, game window found.
+* Smoke test (`bridge --ipc`, temp config): status `connected (Clash of Clans)`; a PowerShell `Set-Clipboard`
+  was classified as a Windows copy (no false "from Play Games"); a 72,964-char UTF-8 JSON (emoji, umlauts)
+  dropped in the inbox was put on the clipboard and saved to `export.json` byte-identical; Play Games then synced
+  it to Android; `stop` released the listener and exited 0.
+* **Not yet verified:** a real in-game Copy reaching Windows. Needs Play Games' tracking to be healthy, which
+  needs a game relaunch, and a human pressing Copy in the game.
+
 Decisions taken without asking (per working rules):
+* Config override for tests: env `GPGBRIDGE_CONFIG=<path to config.json>`.
+* Exports default to `{documents}\GPG Clipboard Exports`, using the real (OneDrive-redirected) Documents known folder.
 * No ADB is downloaded by `setup.ps1`, because it cannot connect to the consumer client.
-* Runtime data (venv, logs, state) goes to `%LOCALAPPDATA%\gpg-clipboard-bridge`, not the OneDrive-synced repo.
-* Exports go to `%USERPROFILE%\Documents\GPG Clipboard Exports` so they are easy to find from Discord's file picker.
+* Runtime data (venv, logs, config.json) goes to `%LOCALAPPDATA%\gpg-clipboard-bridge`, not the OneDrive-synced repo.
+* The bridge never minimizes, moves or sends keys to the game window. The only fix it suggests is the verified
+  relaunch, because the minimize/restore experiment left Play Games tracking `MINIMIZED`.
