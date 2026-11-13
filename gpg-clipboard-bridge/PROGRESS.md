@@ -316,7 +316,12 @@ Verified on this PC (Windows 10 19045, not elevated):
 * 68 unit tests pass (10 new in `test_installer.py`).
 
 Not verifiable locally: SmartScreen's prompt on a downloaded copy (the local build has no Mark-of-the-Web), and the
-GitHub Actions run itself (checked after pushing the tag; see below).
+GitHub Actions run itself (checked after pushing the tag).
+
+First Actions run (tag `v1.0.0` on 46d9069) failed in "Test and build". Job logs need a signed-in account, so it
+was reproduced locally instead. CI passes `-Python <path>`, and `$cands = if ($Python) { , @($Python) }` unrolled
+the single candidate into its characters, giving "Python 3.10+ not found". Local builds never passed `-Python`.
+Fixed, verified with the CI-style invocation, and the tag (no release had been created) was moved to the fix commit.
 
 ## Open items / how to resume
 

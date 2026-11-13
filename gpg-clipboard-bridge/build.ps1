@@ -55,7 +55,8 @@ function Invoke-Native([string]$What, [scriptblock]$Command) {
 }
 
 function Find-Python {
-    $cands = if ($Python) { , @($Python) } else { @(@('py', '-3'), @('python')) }
+    # Assign inside the branches: "$x = if (...) { , @(...) }" unrolls the single candidate into its characters.
+    if ($Python) { $cands = @(, @($Python)) } else { $cands = @(@('py', '-3'), @('python')) }
     foreach ($c in $cands) {
         if (-not (Get-Command $c[0] -ErrorAction SilentlyContinue)) { continue }
         $rest = @(); if ($c.Count -gt 1) { $rest = $c[1..($c.Count - 1)] }
