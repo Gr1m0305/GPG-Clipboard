@@ -267,12 +267,30 @@ Verified: the inbox path in the Part 2 smoke test (72,964-char UTF-8 JSON → cl
   150k+ char Unicode round trip, listener owner attribution).
 * Tailer change found while testing: a log file that appears while the bridge is watching is now read from the start.
 
+## End-to-end verification (2026-11-13 17:21) and follow-up fix
+
+* The user relaunched the game: Play Games logged `ShowWindowRequest`, then the WindowState for the visible game
+  window `200350` became `NORMAL`. They pressed **Copy to clipboard**:
+  `UpdateWindowsClipboardRequest` → `ClipboardModule: Updating Windows clipboard.`, with **no "not foreground"
+  drop**. That supports the Part 1 inference: the drops came from Play Games tracking the wrong (hidden) window,
+  and relaunching the game fixes it.
+* The bridge logged `copied 9139 chars from Play Games (json=True village=True)`. `export.json`, `latest.txt` and
+  `history\` were written, and the Windows clipboard held the identical 9,139-char valid JSON.
+* **Race found:** Play Games also logged `Error while setting clipboard text: COMException: OpenClipboard Failed
+  (CLIPBRD_E_CANT_OPEN)`, and the bridge's read finished about 0.9 s after the change. Cause: the bridge opened the
+  clipboard ≤100 ms after Play Games' `OleSetClipboard` (delayed rendering). Our `GetClipboardData` waited for
+  Play Games to render, while Play Games' `OleFlushClipboard` kept failing to open the clipboard (WPF retries
+  10 × 100 ms without pumping messages) until it gave up. The text still arrived, but the user got a false
+  "could not write the clipboard" toast.
+* **Fix:** the bridge now waits until the clipboard has been quiet for 1.5 s (Play Games-owned or ownerless
+  changes) or 0.3 s (other apps) before opening it. It never reads its own writes. A Play Games write error only
+  triggers a notification if no Play Games clipboard change arrived within 5 s. Tests: `tests/test_bridge.py`
+  (60 tests passing).
+
 ## Open items / how to resume
 
-* **Still to verify with a real in-game copy:** after relaunching the game (so Play Games tracks the game
-  window), press Copy in the game, then expect the toast and `export.json`. If it is dropped again, the log line
-  `Play Games DROPPED an in-game copy ... diagnosis=` shows the foreground window vs the tracked window. That
-  confirms or refutes the "last WindowState" inference in Part 1.
+* Optional re-test after the fix: press Copy in the game once more. Expect one "Copied 9,139 characters" toast
+  and no `CLIPBRD_E_CANT_OPEN` line in Service.log.
 * If Google fixes the tracking bug in a later Play Games version, nothing needs to change. The blocked/stuck
   paths simply stop firing.
 

@@ -34,6 +34,14 @@ log = logging.getLogger("bridge")
 
 UNKNOWN_OWNER_GRACE = 1.5    # seconds to wait for Service.log evidence when the clipboard has no owner
 APPLIED_EVIDENCE_WINDOW = 4.0
+# Play Games writes with WPF/OLE: OleSetClipboard (delayed rendering) then OleFlushClipboard, retrying
+# OpenClipboard 10 x 100 ms. Opening the clipboard during that window blocks us in GetClipboardData and
+# makes Play Games' flush fail (seen 2026-11-13 17:21:59: CLIPBRD_E_CANT_OPEN). So we only read once the
+# clipboard has been quiet this long.
+SETTLE_PLAY_GAMES = 1.5
+SETTLE_OTHER = 0.3
+ERROR_EVIDENCE_WINDOW = 5.0  # a Play Games write error is harmless if its text reached the clipboard anyway
+ERROR_REPORT_DELAY = 3.0
 
 
 @dataclass
@@ -65,6 +73,8 @@ class Bridge:
         self.status: tuple[str, str] | None = None
         self.blocked_since_state = False      # a copy was dropped and no healthy WindowState since
         self.last_applied = -1e9               # monotonic time of last "Updating Windows clipboard."
+        self.last_pg_change = -1e9             # monotonic time of last clipboard change owned by Play Games
+        self.pending_errors: list[float] = []
         self.last_windows_text_len = 0
 
     # -- lifecycle ---------------------------------------------------------
@@ -91,6 +101,7 @@ class Bridge:
                         self._load_inbox_file(path)
                     next_inbox = now + 1.0
                 self._drain_clipboard_changes()
+                self._check_pending_errors()
                 self.stop_event.wait(0.1)
         finally:
             self.listener.stop()
@@ -145,8 +156,13 @@ class Bridge:
             applied = abs(self.last_applied - ch.t) <= APPLIED_EVIDENCE_WINDOW
             origin = classify_origin(ch.owner_pid, self.own_pid, self.gpg.all_pids,
                                      win32.process_image(ch.owner_pid) if ch.owner_pid else None, applied)
-            if origin == Origin.UNKNOWN and now - ch.t < UNKNOWN_OWNER_GRACE:
-                keep.append(ch)  # wait a moment for Service.log to say "Updating Windows clipboard."
+            if origin == Origin.SELF:
+                continue  # our own write: never re-open the clipboard for it
+            settle = SETTLE_OTHER if origin == Origin.OTHER else SETTLE_PLAY_GAMES
+            if origin == Origin.UNKNOWN:
+                settle = max(settle, UNKNOWN_OWNER_GRACE)  # also wait for "Updating Windows clipboard."
+            if now - ch.t < settle:
+                keep.append(ch)  # let the writer finish (and flush) before we open the clipboard
                 continue
             self._handle_change(ch, origin)
         self.pending = keep
@@ -157,6 +173,8 @@ class Bridge:
         except winclip.ClipboardBusy:
             log.warning("clipboard busy; skipped change seq=%s", ch.seq)
             return
+        if origin == Origin.PLAY_GAMES and text:
+            self.last_pg_change = ch.t
         decision = self.tracker.observe(text, origin)
         log.debug("clipboard seq=%s owner=%s origin=%s -> %s (%s)", ch.seq, ch.owner_pid, origin.value,
                   decision.action.value, decision.reason)
@@ -186,8 +204,8 @@ class Bridge:
         elif ev.kind == gpglog.A2W_BLOCKED:
             self._on_blocked(ev)
         elif ev.kind == gpglog.A2W_ERROR:
-            log.warning("Play Games failed to set the Windows clipboard: %s", ev.line)
-            self.emit({"type": "blocked", "cause": "set_error", "advice": "Play Games could not write the clipboard. Press Copy again."})
+            log.warning("Play Games reported a clipboard write error: %s", ev.line.split("ClipboardOperations: ")[-1])
+            self.pending_errors.append(time.monotonic())  # only alert if the text did not arrive anyway
         elif ev.kind == gpglog.WINDOW_STATE:
             ws = ev.data["state"]
             log.info("Play Games now tracks window %s (%s, %s, %dx%d)", ws.window_handle, ws.visibility, ws.mode,
@@ -204,6 +222,21 @@ class Bridge:
                 self.emit({"type": "sent_to_android", "chars": self.last_windows_text_len})
         elif ev.kind == gpglog.GAME_SHOWN:
             self.blocked_since_state = False
+
+    def _check_pending_errors(self) -> None:
+        if not self.pending_errors:
+            return
+        now = time.monotonic()
+        keep = []
+        for t in self.pending_errors:
+            if self.last_pg_change >= t - ERROR_EVIDENCE_WINDOW:
+                log.info("Play Games' write error was harmless: its text reached the Windows clipboard")
+            elif now - t < ERROR_REPORT_DELAY:
+                keep.append(t)
+            else:
+                self.emit({"type": "blocked", "cause": "set_error",
+                           "advice": "Play Games could not write the Windows clipboard. Press Copy again."})
+        self.pending_errors = keep
 
     def _on_blocked(self, ev: gpglog.LogEvent) -> None:
         self._refresh_processes()
